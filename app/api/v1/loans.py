@@ -5,7 +5,7 @@ from dateutil.relativedelta import relativedelta
 from decimal import Decimal
 from typing import List
 from sqlalchemy import or_ 
-from sqlalchemy.sql import func # Importa func para obter a data/hora atual
+from sqlalchemy.sql import func 
 
 from ... import models, schemas
 from ...core import database, security
@@ -37,6 +37,7 @@ def accept_offer(
         # ... (Restante das validações de valor/propriedade)
         if request.amount > offer.max_amount:
             raise HTTPException(status_code=400, detail="Requested amount exceeds offer maximum")
+        
         if borrower.id == offer.lender_id:
              raise HTTPException(status_code=400, detail="Cannot accept your own offer")
 
@@ -44,6 +45,7 @@ def accept_offer(
         lender_account = db.query(models.Account).filter(models.Account.owner_id == offer.lender_id).with_for_update().first()
         if lender_account.balance < request.amount:
             raise HTTPException(status_code=400, detail="Lender has insufficient funds")
+        
         borrower_account = db.query(models.Account).filter(models.Account.owner_id == borrower.id).with_for_update().first()
         
         # 4. Atualiza o Status da Oferta
@@ -52,7 +54,10 @@ def accept_offer(
         # 5. Cria o Novo Empréstimo
         new_loan = models.Loan(
             borrower_id=borrower.id, lender_id=offer.lender_id, credit_offer_id=offer.id,
-            amount=request.amount, interest_rate=offer.interest_rate, term_months=offer.term_months
+            amount=request.amount, interest_rate=offer.interest_rate, term_months=offer.term_months,
+            # Novos campos
+            search_id_fk=None, # Não recebemos search_id aqui, mas o campo está mapeado
+            data_contrato=date.today()
         )
         db.add(new_loan)
         db.flush()
@@ -66,7 +71,9 @@ def accept_offer(
         for i in range(1, new_loan.term_months + 1):
             due_date = date.today() + relativedelta(months=i)
             installment = models.Installment(
-                loan_id=new_loan.id, installment_number=i, due_date=due_date, amount=installment_amount
+                loan_id=new_loan.id, installment_number=i, due_date=due_date, 
+                amount=installment_amount
+                # valor_pago/data_pagamento usam defaults no modelo
             )
             db.add(installment)
             
@@ -111,12 +118,14 @@ def get_my_loans(
     db: Session = Depends(database.get_db)
 ):
     user_id = current_user.id
+    
     loans = db.query(models.Loan).filter(
         or_(
             models.Loan.borrower_id == user_id,
             models.Loan.lender_id == user_id
         )
     ).all()
+    
     return loans
 
 @router.get(
@@ -149,7 +158,6 @@ def get_loan_installments(
     
     return installments
 
-# NOVO ENDPOINT ADICIONADO ABAIXO: Pagamento de Parcela
 @router.post(
     "/loan/{loan_id}/pay-installment", 
     status_code=status.HTTP_200_OK,
@@ -194,22 +202,22 @@ def pay_installment(
         borrower_account.balance -= payment_amount
         lender_account.balance += payment_amount
 
-        # 6. Atualiza o Status da Parcela
+        # 6. Atualiza o Status da Parcela (Utilizando novos campos)
         next_installment.status = models.InstallmentStatus.PAID
-        next_installment.valor_pago = payment_amount # Necessário adicionar 'valor_pago' e 'data_pagamento' no modelo!
-        # Nota: O modelo atual de Installment não tem valor_pago ou data_pagamento, mas vamos simular a atualização
-        
+        next_installment.valor_pago = payment_amount
+        next_installment.data_pagamento = func.now() # Utiliza func.now() para definir a data/hora atual
+
         # 7. Cria Registro de Transação (Ledger)
         installment_reference = str(next_installment.id)
         
-        # Débito (Saída do Mutuário)
         db.add(models.Transaction(
             type=models.TransactionType.PAGAMENTO_PARCELA, value=payment_amount,
             origin_account_id=borrower_account.id, destination_account_id=lender_account.id,
             reference_entity_id=installment_reference
         ))
 
-        # Verifica se o empréstimo foi totalmente pago
+        # 8. Verifica se o empréstimo foi totalmente pago
+        # Contamos as parcelas PENDENTES. Se a contagem for 0, o empréstimo está PAGO.
         remaining_installments = db.query(models.Installment).filter(
             models.Installment.loan_id == loan_id,
             models.Installment.status == models.InstallmentStatus.PENDING
@@ -228,5 +236,4 @@ def pay_installment(
         print(f"ERRO CRÍTICO NO PAGAMENTO DE PARCELA: {e}")
         raise HTTPException(status_code=500, detail="Payment failed due to an unexpected server error.")
     
-    # Retorna uma mensagem de sucesso, pois o status_code é 200 OK
-    return {"message": "Installment paid successfully."}
+    return {"message": f"Installment {next_installment.installment_number} paid successfully."}

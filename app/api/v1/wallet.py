@@ -1,10 +1,11 @@
-# app/api/v1/wallet.py (COMPLETO)
+# app/api/v1/wallet.py
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List 
 from ... import models, schemas
 from ...core import database, security
+from sqlalchemy import or_
 
 router = APIRouter()
 
@@ -36,8 +37,10 @@ def get_transaction_history(
         
     # Busca transações onde a carteira é origem OU destino
     transactions = db.query(models.Transaction).filter(
-        (models.Transaction.origin_account_id == account.id) | 
-        (models.Transaction.destination_account_id == account.id)
+        or_(
+            models.Transaction.origin_account_id == account.id, 
+            models.Transaction.destination_account_id == account.id
+        )
     ).order_by(models.Transaction.timestamp_utc.desc()).all()
     
     return transactions
@@ -48,8 +51,8 @@ def p2p_transfer(transfer_data: schemas.TransferRequest, current_user: models.Us
     if transfer_data.amount <= 0:
         raise HTTPException(status_code=400, detail="Transfer amount must be positive")
 
-    # Garante a atomicidade da transação com try/except/commit/rollback
     try:
+        # Bloqueia as contas para transação atômica
         source_account = db.query(models.Account).filter(models.Account.owner_id == current_user.id).with_for_update().first()
         
         if source_account.balance < transfer_data.amount:
@@ -64,6 +67,7 @@ def p2p_transfer(transfer_data: schemas.TransferRequest, current_user: models.Us
         destination_account.balance += transfer_data.amount
         
         # 2. Criação do Registro de Transação (Ledger)
+        # Registramos APENAS o evento de débito P2P, e o histórico usa a coluna de destino para inferir o crédito.
         tx_debit = models.Transaction(
             type=models.TransactionType.P2P_DEBITO,
             value=transfer_data.amount,
@@ -72,14 +76,6 @@ def p2p_transfer(transfer_data: schemas.TransferRequest, current_user: models.Us
         )
         db.add(tx_debit)
         
-        tx_credit = models.Transaction(
-            type=models.TransactionType.P2P_CREDITO,
-            value=transfer_data.amount,
-            origin_account_id=source_account.id,
-            destination_account_id=destination_account.id
-        )
-        db.add(tx_credit)
-
         db.commit()
     except HTTPException:
         db.rollback()
