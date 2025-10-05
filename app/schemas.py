@@ -1,8 +1,8 @@
 from pydantic import BaseModel, EmailStr, Field
 from decimal import Decimal
 from typing import Optional, List
-from datetime import date
-from .models import KYCStatus, AccountStatus, LoanStatus, InstallmentStatus, OfferStatus
+from datetime import date, datetime
+from .models import KYCStatus, AccountStatus, LoanStatus, InstallmentStatus, OfferStatus, TransactionType, CreditSearchStatus
 
 class UserCreate(BaseModel):
     email: EmailStr
@@ -30,6 +30,18 @@ class AccountOut(BaseModel):
     class Config:
         orm_mode = True
 
+class TransactionOut(BaseModel):
+    id: int
+    timestamp_utc: datetime
+    type: TransactionType
+    value: Decimal
+    origin_account_id: Optional[int]
+    destination_account_id: Optional[int]
+    reference_entity_id: Optional[str]
+
+    class Config:
+        orm_mode = True
+        
 class TransferRequest(BaseModel):
     destination_user_id: int
     amount: Decimal = Field(..., gt=0)
@@ -39,6 +51,7 @@ class CreditOfferCreate(BaseModel):
     interest_rate: Decimal = Field(..., gt=0, lt=1)
     term_months: int = Field(..., gt=0)
     min_credit_score: int = Field(..., ge=0, le=1000)
+    eligible_sector: Optional[str] = None # Adicionado para corresponder ao modelo
 
 class CreditOfferOut(CreditOfferCreate):
     id: int
@@ -48,9 +61,24 @@ class CreditOfferOut(CreditOfferCreate):
     class Config:
         orm_mode = True
 
+# NOVOS SCHEMAS ADICIONADOS ABAIXO
+class CreditSearchCreate(BaseModel):
+    desired_amount: Decimal = Field(..., gt=0)
+    max_interest_rate: Decimal = Field(..., gt=0, lt=1)
+    desired_term_months: int = Field(..., gt=0)
+    expiration_date: Optional[date] = None
+
+class CreditSearchOut(CreditSearchCreate):
+    id: int
+    borrower_id: int
+    status: CreditSearchStatus
+
+    class Config:
+        orm_mode = True
+
 class AcceptOfferRequest(BaseModel):
     amount: Decimal = Field(..., gt=0)
-
+# ... (restante dos schemas)
 class InstallmentOut(BaseModel):
     installment_number: int
     due_date: date

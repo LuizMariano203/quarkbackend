@@ -1,11 +1,14 @@
 from fastapi import FastAPI
-from .api.v1 import auth, wallet, marketplace, loans, admin
+# IMPORTANTE: Adicionar 'user' na lista de imports
+from .api.v1 import auth, wallet, marketplace, loans, admin, user
 from .core.database import Base, engine
 from .core.config import settings
 
 app = FastAPI(title="Quark Platform API")
 
+# Incluir o novo router de usuário
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
+app.include_router(user.router, prefix="/api/v1/user", tags=["User"])
 app.include_router(wallet.router, prefix="/api/v1/wallet", tags=["Wallet"])
 app.include_router(marketplace.router, prefix="/api/v1/marketplace", tags=["Marketplace"])
 app.include_router(loans.router, prefix="/api/v1", tags=["Loans"])
